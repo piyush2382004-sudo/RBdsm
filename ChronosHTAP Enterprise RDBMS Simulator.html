@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChronosHTAP — Enterprise Hybrid RDBMS Engine</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans antialiased min-h-screen flex flex-col">
+
+  <!-- Top Navigation & System Telemetry Bar -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-30">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center font-mono font-bold text-white shadow-lg shadow-indigo-500/20">
+          CH
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-base sm:text-lg font-bold tracking-tight text-white">ChronosHTAP</h1>
+            <span class="px-2 py-0.5 text-[11px] font-mono font-semibold rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              v2.4 VECTORIZED
+            </span>
+          </div>
+          <p class="text-xs text-slate-400 hidden sm:block">Hybrid Row/Columnar Storage • ARIES WAL • MVCC Snapshot Isolation</p>
+        </div>
+      </div>
+
+      <!-- Live Telemetry Counters -->
+      <div class="flex flex-wrap items-center gap-2 sm:gap-4 text-xs font-mono">
+        <div class="px-3 py-1.5 rounded-lg bg-slate-800/90 border border-slate-700/70">
+          <span class="text-slate-400">LSN:</span>
+          <span id="stat-lsn" class="text-amber-400 font-semibold">0001</span>
+        </div>
+        <div class="px-3 py-1.5 rounded-lg bg-slate-800/90 border border-slate-700/70">
+          <span class="text-slate-400">Delta Pages:</span>
+          <span id="stat-pages" class="text-sky-400 font-semibold">1</span>
+        </div>
+        <div class="px-3 py-1.5 rounded-lg bg-slate-800/90 border border-slate-700/70">
+          <span class="text-slate-400">Columnar Rows:</span>
+          <span id="stat-col-rows" class="text-purple-400 font-semibold">0</span>
+        </div>
+        <div class="px-3 py-1.5 rounded-lg bg-slate-800/90 border border-slate-700/70">
+          <span class="text-slate-400">Active Txn:</span>
+          <span id="stat-txn" class="text-emerald-400 font-semibold">AUTO</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Notification Toast Banner -->
+  <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none px-4 sm:px-0"></div>
+
+  <!-- Main Workspace Grid -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+    <!-- Left Column: SQL Console, MVCC Transaction Controls & HTAP Operations (7 cols) -->
+    <section class="lg:col-span-7 flex flex-col gap-6">
+
+      <!-- OLTP & MVCC Control Deck -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-5 shadow-xl">
+        <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+          <div>
+            <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-300">OLTP Ingestion & MVCC Controller</h2>
+            <p class="text-xs text-slate-400">Test Snapshot Isolation, dirty writes, and HTAP Row-to-Columnar compaction</p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button id="btn-begin-txn" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
+              BEGIN TXN
+            </button>
+            <button id="btn-commit-txn" disabled class="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 disabled:opacity-40 hover:bg-emerald-600/30 transition">
+              COMMIT
+            </button>
+            <button id="btn-abort-txn" disabled class="px-3 py-1.5 rounded-lg text-xs font-medium bg-rose-600/20 text-rose-400 border border-rose-500/30 disabled:opacity-40 hover:bg-rose-600/30 transition">
+              ABORT
+            </button>
+          </div>
+        </div>
+
+        <!-- Quick Actions Toolbar -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+          <button id="btn-insert-1" class="p-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold shadow transition flex flex-col items-center justify-center gap-1">
+            <span>+1 OLTP Row</span>
+            <span class="text-[10px] font-mono text-sky-100 opacity-80">Slotted Page</span>
+          </button>
+          <button id="btn-insert-batch" class="p-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow transition flex flex-col items-center justify-center gap-1">
+            <span>+250 Bulk Rows</span>
+            <span class="text-[10px] font-mono text-indigo-100 opacity-80">Multi-Page Fill</span>
+          </button>
+          <button id="btn-compact" class="p-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold shadow transition flex flex-col items-center justify-center gap-1">
+            <span>HTAP Compact</span>
+            <span class="text-[10px] font-mono text-purple-100 opacity-80">Row → Columnar</span>
+          </button>
+          <button id="btn-crash-recover" class="p-2.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold shadow transition flex flex-col items-center justify-center gap-1">
+            <span>Crash & Recover</span>
+            <span class="text-[10px] font-mono text-amber-100 opacity-80">ARIES WAL Replay</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Vectorized SQL Query Console -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-5 shadow-xl flex flex-col gap-3">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2">
+            <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-300">Vectorized SQL Engine</h2>
+            <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-indigo-400">Batch Size: 2,048</span>
+          </div>
+          <div class="flex flex-wrap gap-1.5">
+            <button data-preset="olap_agg" class="preset-sql px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] font-mono text-slate-300 border border-slate-700">
+              OLAP Group-By
+            </button>
+            <button data-preset="filter_scan" class="preset-sql px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] font-mono text-slate-300 border border-slate-700">
+              SIMD Filter
+            </button>
+            <button data-preset="insert_sql" class="preset-sql px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] font-mono text-slate-300 border border-slate-700">
+              SQL Insert
+            </button>
+          </div>
+        </div>
+
+        <textarea id="sql-input" rows="4" spellcheck="false" class="w-full rounded-lg bg-slate-950 border border-slate-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 p-3 font-mono text-xs sm:text-sm text-emerald-300 leading-relaxed resize-y">SELECT region, COUNT(*) AS orders, SUM(amount) AS revenue, AVG(amount) AS avg_ticket
+FROM orders
+WHERE amount > 150
+GROUP BY region;</textarea>
+
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div id="query-plan-badge" class="text-xs font-mono text-slate-400 truncate">
+            Plan: HybridScan(Col+Delta) → VectorFilter → HashAggregate
+          </div>
+          <button id="btn-run-sql" class="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-lg shadow-emerald-600/20 transition">
+            Execute Vectorized Query
+          </button>
+        </div>
+
+        <!-- Query Results Table -->
+        <div class="mt-2 border border-slate-800 rounded-lg overflow-hidden bg-slate-950">
+          <div class="px-3 py-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between text-xs font-mono">
+            <span class="text-slate-300 font-semibold">Query Output</span>
+            <span id="query-latency" class="text-emerald-400">Ready</span>
+          </div>
+          <div id="query-result-container" class="overflow-x-auto max-h-64">
+            <table class="w-full text-left border-collapse font-mono text-xs">
+              <thead id="result-thead" class="bg-slate-900 text-slate-400 border-b border-slate-800"></thead>
+              <tbody id="result-tbody" class="divide-y divide-slate-800/70 text-slate-200">
+                <tr><td class="p-4 text-slate-500 text-center">Run a query or ingest rows to inspect vectorized output.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Hybrid Storage Architecture Visualizer (Delta vs Columnar Segments) -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-5 shadow-xl">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-300">Hybrid Storage Topology (Delta + Main)</h2>
+          <span class="text-xs font-mono text-slate-400">Unified Snapshot View</span>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <!-- Write-Optimized Row Delta Store -->
+          <div class="p-3.5 rounded-lg bg-slate-950 border border-sky-500/30">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold text-sky-400 uppercase tracking-wide">1. Row Delta Store (OLTP)</span>
+              <span id="delta-row-badge" class="text-[11px] font-mono px-2 py-0.5 rounded bg-sky-500/10 text-sky-300">0 rows</span>
+            </div>
+            <p class="text-[11px] text-slate-400 mb-3">Mutable 4KB Slotted Pages with MVCC headers (<code class="text-slate-300">xmin</code>/<code class="text-slate-300">xmax</code>).</p>
+            <div id="delta-pages-visual" class="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto"></div>
+          </div>
+
+          <!-- Read-Optimized Columnar Main Store -->
+          <div class="p-3.5 rounded-lg bg-slate-950 border border-purple-500/30">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold text-purple-400 uppercase tracking-wide">2. Columnar Main Store (OLAP)</span>
+              <span id="col-segment-badge" class="text-[11px] font-mono px-2 py-0.5 rounded bg-purple-500/10 text-purple-300">0 segments</span>
+            </div>
+            <p class="text-[11px] text-slate-400 mb-3">Immutable contiguous TypedArrays for zero-copy SIMD scans.</p>
+            <div id="columnar-segments-visual" class="flex flex-col gap-1.5 max-h-28 overflow-y-auto text-xs font-mono">
+              <div class="text-slate-600 text-[11px]">No compacted segments yet. Click "HTAP Compact".</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Right Column: 4KB Slotted Page Memory Inspector & ARIES WAL Stream (5 cols) -->
+    <section class="lg:col-span-5 flex flex-col gap-6">
+
+      <!-- 4KB Binary Slotted Page Memory Map -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-5 shadow-xl">
+        <div class="flex items-center justify-between mb-2">
+          <div>
+            <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-300">4KB Slotted Page Inspector</h2>
+            <p class="text-xs text-slate-400">Real-time binary layout: Header → Slots → Free ← Tuples</p>
+          </div>
+          <select id="page-selector" class="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs font-mono text-sky-300 focus:outline-none">
+            <option value="0">Page #0</option>
+          </select>
+        </div>
+
+        <!-- Page Header Metadata -->
+        <div class="grid grid-cols-3 gap-2 my-3 text-center font-mono text-xs">
+          <div class="bg-slate-950 p-2 rounded-lg border border-slate-800">
+            <div class="text-[10px] text-slate-500">SLOTS</div>
+            <div id="insp-slots" class="text-sky-400 font-bold">0</div>
+          </div>
+          <div class="bg-slate-950 p-2 rounded-lg border border-slate-800">
+            <div class="text-[10px] text-slate-500">FREE SPACE</div>
+            <div id="insp-free" class="text-emerald-400 font-bold">4080 B</div>
+          </div>
+          <div class="bg-slate-950 p-2 rounded-lg border border-slate-800">
+            <div class="text-[10px] text-slate-500">PAGE LSN</div>
+            <div id="insp-lsn" class="text-amber-400 font-bold">0</div>
+          </div>
+        </div>
+
+        <!-- Visual Memory Bar -->
+        <div class="w-full h-5 rounded-md bg-slate-950 border border-slate-800 overflow-hidden flex text-[9px] font-mono font-bold mb-3">
+          <div id="bar-header" style="width: 3%" class="bg-indigo-500 flex items-center justify-center text-white" title="16B Header">H</div>
+          <div id="bar-slots" style="width: 0%" class="bg-sky-500 flex items-center justify-center text-slate-950 transition-all" title="Slot Array"></div>
+          <div id="bar-free" style="width: 97%" class="bg-slate-900 flex items-center justify-center text-slate-500 transition-all" title="Unallocated Free Space">FREE</div>
+          <div id="bar-tuples" style="width: 0%" class="bg-emerald-500 flex items-center justify-center text-slate-950 transition-all" title="MVCC Tuples"></div>
+        </div>
+
+        <!-- Hex / Tuple Dump -->
+        <div class="bg-slate-950 border border-slate-800 rounded-lg p-3 font-mono text-[11px] max-h-56 overflow-y-auto">
+          <div class="text-slate-500 border-b border-slate-800 pb-1 mb-2 flex justify-between">
+            <span>SLOT | OFFSET | MVCC (xmin/xmax)</span>
+            <span>PAYLOAD</span>
+          </div>
+          <div id="page-slot-list" class="flex flex-col gap-1.5 text-slate-300">
+            <div class="text-slate-600 italic">Page empty (4,080 bytes available).</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ARIES Write-Ahead Log (WAL) Stream -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 sm:p-5 shadow-xl flex-1 flex flex-col">
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-300">ARIES Write-Ahead Log (WAL)</h2>
+            <p class="text-xs text-slate-400">CRC32-checksummed durability records flushed before commit</p>
+          </div>
+          <span class="px-2 py-0.5 text-[10px] font-mono rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+            fsync ON
+          </span>
+        </div>
+
+        <div id="wal-stream" class="flex-1 bg-slate-950 border border-slate-800 rounded-lg p-3 font-mono text-[11px] max-h-72 overflow-y-auto flex flex-col gap-1.5">
+          <!-- WAL records injected dynamically -->
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- Core ChronosHTAP Engine Implementation in Vanilla JS -->
+  <script>
+    /**
+     * ChronosHTAP Browser Engine
+     * Mirrors the Python/C++ enterprise RDBMS architecture:
+     * 1. SlottedPage (4096B ArrayBuffer + DataView binary layout)
+     * 2. WALManager (ARIES LSN chain, CRC32 checksums, Crash Recovery Redo/Undo)
+     * 3. MVCCManager (Snapshot Isolation visibility rules)
+     * 4. HybridTable (Row-Oriented Delta Pages + Columnar TypedArray Segments)
+     * 5. VectorizedExecutor (2,048-row batch SIMD-style predicate & hash aggregation)
+     */
+
+    const PAGE_SIZE = 4096;
+    const HEADER_SIZE = 16; // page_id (4B), lsn (8B -> 2xUint32), num_slots (2B), free_offset (2B)
+    const SLOT_SIZE = 4;    // offset (2B), length (2B)
+    const MVCC_SIZE = 17;   // xmin (4B), xmax (4B), is_deleted (1B), padding (8B)
+    const MAX_TXN_ID = 0xFFFFFFFF;
+    const VECTOR_BATCH_SIZE = 2048;
+
+    const REGIONS = ['NA', 'EU', 'APAC', 'LATAM'];
+    const CATEGORIES = ['CLOUD', 'AI_COMPUTE', 'STORAGE', 'NETWORK'];
+
+    // Simple deterministic CRC32 implementation for WAL records
+    function computeCRC32(str) {
+      let crc = 0 ^ (-1);
+      for (let i = 0; i < str.length; i++) {
+        crc = (crc >>> 8) ^ ((crc ^ str.charCodeAt(i)) & 0xFF) * 0xEDB88320;
+      }
+      return ((crc ^ (-1)) >>> 0).toString(16).toUpperCase().padStart(8, '0');
+    }
+
+    // -------------------------------------------------------------------------
+    // 1. 4KB Binary Slotted Page (ArrayBuffer + DataView)
+    // -------------------------------------------------------------------------
+    class SlottedPage {
+      constructor(pageId) {
+        this.buffer = new ArrayBuffer(PAGE_SIZE);
+        this.view = new DataView(this.buffer);
+        this.bytes = new Uint8Array(this.buffer);
+
+        this.view.setUint32(0, pageId, true);
+        this.view.setUint32(4, 0, true); // LSN low
+        this.view.setUint32(8, 0, true); // LSN high
+        this.view.setUint16(12, 0, true); // num_slots
+        this.view.setUint16(14, PAGE_SIZE, true); // free_space_offset
+      }
+
+      get pageId() { return this.view.getUint32(0, true); }
+      get lsn() { return this.view.getUint32(4, true); }
+      set lsn(val) { this.view.setUint32(4, val, true); }
+      get numSlots() { return this.view.getUint16(12, true); }
+      get freeSpaceOffset() { return this.view.getUint16(14, true); }
+
+      freeSpaceRemaining() {
+        const slotEnd = HEADER_SIZE + this.numSlots * SLOT_SIZE;
+        return this.freeSpaceOffset - slotEnd;
+      }
+
+      insertTuple(xmin, rowObj) {
+        const encoded = new TextEncoder().encode(JSON.stringify(rowObj));
+        const totalTupleLen = MVCC_SIZE + encoded.length;
+        const required = totalTupleLen + SLOT_SIZE;
+
+        if (this.freeSpaceRemaining() < required) return null;
+
+        const slotId = this.numSlots;
+        const newOffset = this.freeSpaceOffset - totalTupleLen;
+
+        // Write MVCC Header
+        this.view.setUint32(newOffset, xmin, true);
+        this.view.setUint32(newOffset + 4, MAX_TXN_ID, true);
+        this.view.setUint8(newOffset + 8, 0);
+
+        // Write Payload
+        this.bytes.set(encoded, newOffset + MVCC_SIZE);
+
+        // Write Slot Directory Entry
+        const slotPos = HEADER_SIZE + slotId * SLOT_SIZE;
+        this.view.setUint16(slotPos, newOffset, true);
+        this.view.setUint16(slotPos + 2, totalTupleLen, true);
+
+        // Update Header
+        this.view.setUint16(12, slotId + 1, true);
+        this.view.setUint16(14, newOffset, true);
+
+        return slotId;
+      }
+
+      getTuple(slotId) {
+        const slotPos = HEADER_SIZE + slotId * SLOT_SIZE;
+        const offset = this.view.getUint16(slotPos, true);
+        const len = this.view.getUint16(slotPos + 2, true);
+
+        const xmin = this.view.getUint32(offset, true);
+        const xmax = this.view.getUint32(offset + 4, true);
+        const isDeleted = this.view.getUint8(offset + 8);
+        const payloadBytes = this.bytes.slice(offset + MVCC_SIZE, offset + len);
+        const row = JSON.parse(new TextDecoder().decode(payloadBytes));
+
+        return { slotId, offset, len, xmin, xmax, isDeleted, row };
+      }
+
+      markDeleted(slotId, xmax) {
+        const slotPos = HEADER_SIZE + slotId * SLOT_SIZE;
+        const offset = this.view.getUint16(slotPos, true);
+        this.view.setUint32(offset + 4, xmax, true);
+        this.view.setUint8(offset + 8, 1);
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. ARIES Write-Ahead Log (WAL) & MVCC Transaction Manager
+    // -------------------------------------------------------------------------
+    class ChronosEngine {
+      constructor() {
+        this.nextLsn = 1;
+        this.nextTxnId = 1;
+        this.nextOrderId = 1;
+
+        this.walRecords = [];
+        this.committedTxns = new Set();
+        this.abortedTxns = new Set();
+        this.activeTxns = new Map();
+        this.explicitTxn = null;
+
+        this.deltaPages = [new SlottedPage(0)];
+        this.columnarSegments = []; // Array of { rowCount, order_id: Int32Array, region: Array, category: Array, amount: Float64Array }
+      }
+
+      appendWAL(txnId, type, pageId = null, payload = null) {
+        const lsn = this.nextLsn++;
+        const rawStr = `${lsn}|${txnId}|${type}|${pageId}|${JSON.stringify(payload)}`;
+        const record = {
+          lsn,
+          txnId,
+          type,
+          pageId,
+          payload: payload ? structuredClone(payload) : null,
+          crc: computeCRC32(rawStr),
+          timestamp: new Date().toLocaleTimeString(),
+        };
+        this.walRecords.push(record);
+        return record;
+      }
+
+      beginTxn() {
+        const txnId = this.nextTxnId++;
+        const txn = {
+          txnId,
+          snapshotTs: txnId,
+          activeAtStart: new Set(this.activeTxns.keys()),
+          writeSet: [], // { pageId, slotId }
+        };
+        this.activeTxns.set(txnId, txn);
+        this.appendWAL(txnId, 'BEGIN');
+        return txn;
+      }
+
+      commitTxn(txn) {
+        this.appendWAL(txn.txnId, 'COMMIT');
+        this.activeTxns.delete(txn.txnId);
+        this.committedTxns.add(txn.txnId);
+      }
+
+      abortTxn(txn) {
+        for (const item of [...txn.writeSet].reverse()) {
+          const page = this.deltaPages[item.pageId];
+          if (page) page.markDeleted(item.slotId, txn.txnId);
+        }
+        this.appendWAL(txn.txnId, 'ABORT');
+        this.activeTxns.delete(txn.txnId);
+        this.abortedTxns.add(txn.txnId);
+      }
+
+      isVisible(tuple, readerTxn) {
+        const { xmin, xmax, isDeleted } = tuple;
+        if (xmin !== readerTxn.txnId) {
+          if (this.abortedTxns.has(xmin)) return false;
+          if (readerTxn.activeAtStart.has(xmin)) return false;
+          if (xmin > readerTxn.snapshotTs) return false;
+          if (!this.committedTxns.has(xmin)) return false;
+        }
+        if (isDeleted === 1 && xmax !== MAX_TXN_ID) {
+          if (xmax === readerTxn.txnId) return false;
+          if (this.committedTxns.has(xmax) && !readerTxn.activeAtStart.has(xmax) && xmax < readerTxn.snapshotTs) {
+            return false;
+          }
+        }
+        return true;
+      }
+
+      insertOrderRow(rowObj, txn = null) {
+        const autoCommit = txn === null;
+        const activeTxn = txn || this.beginTxn();
+
+        let targetPage = this.deltaPages[this.deltaPages.length - 1];
+        let slotId = targetPage.insertTuple(activeTxn.txnId, rowObj);
+
+        if (slotId === null) {
+          targetPage = new SlottedPage(this.deltaPages.length);
+          this.deltaPages.push(targetPage);
+          slotId = targetPage.insertTuple(activeTxn.txnId, rowObj);
+        }
+
+        const walRec = this.appendWAL(activeTxn.txnId, 'INSERT', targetPage.pageId, { slotId, row: rowObj });
+        targetPage.lsn = walRec.lsn;
+        activeTxn.writeSet.push({ pageId: targetPage.pageId, slotId });
+
+        if (autoCommit) {
+          this.commitTxn(activeTxn);
+        }
+        return { pageId: targetPage.pageId, slotId };
+      }
+
+      // HTAP Row-to-Columnar Compactor
+      compactDeltaToColumnar() {
+        const lowestActive = this.activeTxns.size > 0
+          ? Math.min(...this.activeTxns.keys())
+          : this.nextTxnId;
+
+        const orderIds = [];
+        const regions = [];
+        const categories = [];
+        const amounts = [];
+
+        const newPages = [];
+        let currentFreshPage = new SlottedPage(0);
+        let retainedCount = 0;
+
+        for (const page of this.deltaPages) {
+          for (let s = 0; s < page.numSlots; s++) {
+            const tup = page.getTuple(s);
+            if (tup.isDeleted === 1) continue;
+
+            if (tup.xmin < lowestActive && this.committedTxns.has(tup.xmin)) {
+              orderIds.push(tup.row.order_id);
+              regions.push(tup.row.region);
+              categories.push(tup.row.category);
+              amounts.push(tup.row.amount);
+            } else {
+              // Keep uncommitted or active-snapshot tuples in Delta Store
+              let slot = currentFreshPage.insertTuple(tup.xmin, tup.row);
+              if (slot === null) {
+                newPages.push(currentFreshPage);
+                currentFreshPage = new SlottedPage(newPages.length);
+                slot = currentFreshPage.insertTuple(tup.xmin, tup.row);
+              }
+              retainedCount++;
+            }
+          }
+        }
+
+        if (orderIds.length === 0) return 0;
+
+        newPages.push(currentFreshPage);
+        this.deltaPages = newPages;
+
+        // Build contiguous typed columnar segment
+        const segment = {
+          id: this.columnarSegments.length + 1,
+          rowCount: orderIds.length,
+          order_id: Int32Array.from(orderIds),
+          region: regions,
+          category: categories,
+          amount: Float64Array.from(amounts),
+        };
+        this.columnarSegments.push(segment);
+        this.appendWAL(0, 'CHECKPOINT', null, { compactedRows: orderIds.length, segmentId: segment.id });
+
+        return orderIds.length;
+      }
+
+      // ARIES Crash Recovery Simulation (Analysis -> Redo -> Undo)
+      simulateCrashAndRecover() {
+        // Wipe volatile memory state (Delta Pages & Uncommitted Active Txns)
+        const preCrashActive = this.activeTxns.size;
+        this.deltaPages = [new SlottedPage(0)];
+        this.columnarSegments = [];
+        this.activeTxns.clear();
+        this.explicitTxn = null;
+
+        // Phase 1: Analysis
+        const committed = new Set();
+        const aborted = new Set();
+        for (const rec of this.walRecords) {
+          if (rec.type === 'COMMIT') committed.add(rec.txnId);
+          if (rec.type === 'ABORT') aborted.add(rec.txnId);
+        }
+
+        // Phase 2 & 3: Redo Committed Inserts, Undo Uncommitted
+        let redone = 0;
+        let undone = 0;
+
+        for (const rec of this.walRecords) {
+          if (rec.type === 'INSERT') {
+            if (committed.has(rec.txnId)) {
+              let targetPage = this.deltaPages[this.deltaPages.length - 1];
+              let slotId = targetPage.insertTuple(rec.txnId, rec.payload.row);
+              if (slotId === null) {
+                targetPage = new SlottedPage(this.deltaPages.length);
+                this.deltaPages.push(targetPage);
+                slotId = targetPage.insertTuple(rec.txnId, rec.payload.row);
+              }
+              targetPage.lsn = rec.lsn;
+              redone++;
+            } else {
+              aborted.add(rec.txnId);
+              undone++;
+            }
+          }
+        }
+
+        this.committedTxns = committed;
+        this.abortedTxns = aborted;
+        return { redone, undone, preCrashActive };
+      }
+
+      // Vectorized SQL Execution Pipeline
+      executeSQL(sql) {
+        const t0 = performance.now();
+        const clean = sql.trim().replace(/;+$/, '');
+        const upper = clean.toUpperCase();
+
+        if (upper.startsWith('INSERT INTO')) {
+          const match = clean.match(/INSERT\s+INTO\s+orders\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
+          if (!match) throw new Error('Syntax: INSERT INTO orders (order_id, region, category, amount) VALUES (...)');
+          const cols = match[1].split(',').map(s => s.trim());
+          const vals = match[2].split(',').map(s => s.trim().replace(/^['"]|['"]$/g, ''));
+          const row = {
+            order_id: this.nextOrderId++,
+            region: 'NA',
+            category: 'CLOUD',
+            amount: 100.0,
+          };
+          cols.forEach((c, idx) => {
+            if (c === 'order_id') row.order_id = parseInt(vals[idx], 10);
+            else if (c === 'amount') row.amount = parseFloat(vals[idx]);
+            else row[c] = vals[idx];
+          });
+          this.insertOrderRow(row, this.explicitTxn);
+          const ms = (performance.now() - t0).toFixed(2);
+          return {
+            columns: ['status', 'order_id', 'region', 'amount'],
+            rows: [['INSERTED', row.order_id, row.region, row.amount]],
+            latencyMs: ms,
+            plan: 'OLTPWrite → SlottedPageInsert + WAL_Append',
+          };
+        }
+
+        if (!upper.startsWith('SELECT')) {
+          throw new Error('Supported SQL statements: SELECT ... FROM orders [WHERE ...] [GROUP BY ...] and INSERT INTO orders ...');
+        }
+
+        // Create Snapshot Reader
+        const readerTxn = this.explicitTxn || {
+          txnId: this.nextTxnId,
+          snapshotTs: this.nextTxnId,
+          activeAtStart: new Set(this.activeTxns.keys()),
+        };
+
+        // Parse WHERE clause: e.g., WHERE amount > 150 or WHERE region = 'NA'
+        const whereMatch = clean.match(/WHERE\s+(\w+)\s*(=|!=|>=|<=|>|<)\s*(['"]?[\w.]+['"]?)/i);
+        let filterCol = null, filterOp = null, filterVal = null;
+        if (whereMatch) {
+          filterCol = whereMatch[1].toLowerCase();
+          filterOp = whereMatch[2];
+          const rawV = whereMatch[3];
+          filterVal = /^['"]/.test(rawV) ? rawV.replace(/^['"]|['"]$/g, '') : parseFloat(rawV);
+        }
+
+        const evalPredicate = (val) => {
+          if (!filterCol) return true;
+          switch (filterOp) {
+            case '=': return val === filterVal;
+            case '!=': return val !== filterVal;
+            case '>': return val > filterVal;
+            case '>=': return val >= filterVal;
+            case '<': return val < filterVal;
+            case '<=': return val <= filterVal;
+            default: return true;
+          }
+        };
+
+        // Vectorized Scan + Selection Mask across Columnar Main Store + MVCC Delta Store
+        const matchedRows = [];
+        let batchesProcessed = 0;
+
+        // 1. Scan Immutable Columnar Segments in 2,048-row vector chunks
+        for (const seg of this.columnarSegments) {
+          for (let offset = 0; offset < seg.rowCount; offset += VECTOR_BATCH_SIZE) {
+            batchesProcessed++;
+            const end = Math.min(offset + VECTOR_BATCH_SIZE, seg.rowCount);
+            const targetArr = filterCol ? seg[filterCol] : null;
+
+            for (let i = offset; i < end; i++) {
+              if (!filterCol || evalPredicate(targetArr[i])) {
+                matchedRows.push({
+                  order_id: seg.order_id[i],
+                  region: seg.region[i],
+                  category: seg.category[i],
+                  amount: seg.amount[i],
+                });
+              }
+            }
+          }
+        }
+
+        // 2. Scan Mutable 4KB Delta Slotted Pages with MVCC Snapshot Filter
+        for (const page of this.deltaPages) {
+          if (page.numSlots > 0) batchesProcessed++;
+          for (let s = 0; s < page.numSlots; s++) {
+            const tup = page.getTuple(s);
+            if (!this.isVisible(tup, readerTxn)) continue;
+            if (!filterCol || evalPredicate(tup.row[filterCol])) {
+              matchedRows.push(tup.row);
+            }
+          }
+        }
+
+        // Check for GROUP BY / Aggregations
+        const groupMatch = clean.match(/GROUP\s+BY\s+(\w+)/i);
+        const hasAgg = /(COUNT|SUM|AVG|MIN|MAX)\s*\(/i.test(clean);
+
+        if (groupMatch || hasAgg) {
+          const groupCol = groupMatch ? groupMatch[1].toLowerCase() : null;
+          const groups = new Map();
+
+          for (const r of matchedRows) {
+            const key = groupCol ? r[groupCol] : '__ALL__';
+            if (!groups.has(key)) {
+              groups.set(key, { count: 0, sum: 0, min: Infinity, max: -Infinity });
+            }
+            const g = groups.get(key);
+            g.count += 1;
+            g.sum += r.amount;
+            if (r.amount < g.min) g.min = r.amount;
+            if (r.amount > g.max) g.max = r.amount;
+          }
+
+          const outCols = groupCol
+            ? [groupCol, 'orders', 'revenue', 'avg_ticket']
+            : ['orders', 'revenue', 'avg_ticket'];
+
+          const outRows = [];
+          for (const [key, stats] of groups.entries()) {
+            const avg = stats.count > 0 ? +(stats.sum / stats.count).toFixed(2) : 0;
+            const sum = +stats.sum.toFixed(2);
+            if (groupCol) {
+              outRows.push([key, stats.count, sum, avg]);
+            } else {
+              outRows.push([stats.count, sum, avg]);
+            }
+          }
+
+          const ms = (performance.now() - t0).toFixed(2);
+          return {
+            columns: outCols,
+            rows: outRows,
+            latencyMs: `${ms} ms (${batchesProcessed} vector batches)`,
+            plan: `HybridScan(${this.columnarSegments.length} ColSeg + ${this.deltaPages.length} DeltaPg) → VectorFilter → HashAggregate`,
+          };
+        }
+
+        // Standard Projection (Limit display to top 100 rows for UI responsiveness)
+        const displayRows = matchedRows.slice(0, 100).map(r => [r.order_id, r.region, r.category, r.amount.toFixed(2)]);
+        const ms = (performance.now() - t0).toFixed(2);
+        return {
+          columns: ['order_id', 'region', 'category', 'amount'],
+          rows: displayRows,
+          latencyMs: `${ms} ms (${matchedRows.length} matched)`,
+          plan: `HybridScan(${this.columnarSegments.length} ColSeg + ${this.deltaPages.length} DeltaPg) → VectorFilter → Project`,
+        };
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. UI Controller & Real-Time Visualizations
+    // -------------------------------------------------------------------------
+    const engine = new ChronosEngine();
+
+    function showToast(title, message, tone = 'info') {
+      const container = document.getElementById('toast-container');
+      const colors = {
+        info: 'border-sky-500/40 bg-slate-900 text-sky-300',
+        success: 'border-emerald-500/40 bg-slate-900 text-emerald-300',
+        warn: 'border-amber-500/40 bg-slate-900 text-amber-300',
+        error: 'border-rose-500/40 bg-slate-900 text-rose-300',
+      };
+      const el = document.createElement('div');
+      el.className = `pointer-events-auto border rounded-lg p-3 shadow-2xl transition-all duration-300 ${colors[tone] || colors.info}`;
+      el.innerHTML = `<div class="text-xs font-bold">${title}</div><div class="text-[11px] text-slate-300 mt-0.5">${message}</div>`;
+      container.appendChild(el);
+      setTimeout(() => {
+        el.classList.add('opacity-0', 'translate-y-2');
+        setTimeout(() => el.remove(), 300);
+      }, 3200);
+    }
+
+    function generateRandomOrder() {
+      const id = engine.nextOrderId++;
+      return {
+        order_id: id,
+        region: REGIONS[id % REGIONS.length],
+        category: CATEGORIES[(id * 3) % CATEGORIES.length],
+        amount: +((Math.random() * 450) + 25).toFixed(2),
+      };
+    }
+
+    function refreshAllUI() {
+      // Telemetry Header
+      document.getElementById('stat-lsn').textContent = String(engine.nextLsn - 1).padStart(4, '0');
+      document.getElementById('stat-pages').textContent = engine.deltaPages.length;
+      const totalColRows = engine.columnarSegments.reduce((acc, s) => acc + s.rowCount, 0);
+      document.getElementById('stat-col-rows').textContent = totalColRows.toLocaleString();
+
+      const txnBadge = document.getElementById('stat-txn');
+      const btnBegin = document.getElementById('btn-begin-txn');
+      const btnCommit = document.getElementById('btn-commit-txn');
+      const btnAbort = document.getElementById('btn-abort-txn');
+
+      if (engine.explicitTxn) {
+        txnBadge.textContent = `TXN #${engine.explicitTxn.txnId}`;
+        txnBadge.className = 'text-amber-400 font-semibold';
+        btnBegin.disabled = true;
+        btnCommit.disabled = false;
+        btnAbort.disabled = false;
+      } else {
+        txnBadge.textContent = 'AUTO';
+        txnBadge.className = 'text-emerald-400 font-semibold';
+        btnBegin.disabled = false;
+        btnCommit.disabled = true;
+        btnAbort.disabled = true;
+      }
+
+      // Delta Pages Visual
+      const deltaVisual = document.getElementById('delta-pages-visual');
+      deltaVisual.innerHTML = '';
+      let totalDeltaRows = 0;
+
+      engine.deltaPages.forEach((page, idx) => {
+        totalDeltaRows += page.numSlots;
+        const pctUsed = Math.round(((PAGE_SIZE - page.freeSpaceRemaining()) / PAGE_SIZE) * 100);
+        const pill = document.createElement('button');
+        pill.className = 'px-2 py-1 rounded bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-[11px] font-mono text-sky-300 transition';
+        pill.textContent = `Pg#${idx} (${page.numSlots}r • ${pctUsed}%)`;
+        pill.onclick = () => {
+          document.getElementById('page-selector').value = String(idx);
+          renderPageInspector(idx);
+        };
+        deltaVisual.appendChild(pill);
+      });
+      document.getElementById('delta-row-badge').textContent = `${totalDeltaRows} rows`;
+
+      // Columnar Segments Visual
+      const colVisual = document.getElementById('columnar-segments-visual');
+      document.getElementById('col-segment-badge').textContent = `${engine.columnarSegments.length} segments`;
+      if (engine.columnarSegments.length === 0) {
+        colVisual.innerHTML = '<div class="text-slate-600 text-[11px]">No compacted segments yet. Click "HTAP Compact".</div>';
+      } else {
+        colVisual.innerHTML = engine.columnarSegments.map(seg => `
+          <div class="p-2 rounded bg-purple-500/10 border border-purple-500/30 flex items-center justify-between text-[11px]">
+            <span class="text-purple-300 font-semibold">Segment #${seg.id} (Arrow Pax)</span>
+            <span class="text-slate-300">${seg.rowCount.toLocaleString()} rows • 4 cols</span>
+          </div>
+        `).join('');
+      }
+
+      // Update Page Selector Dropdown
+      const selector = document.getElementById('page-selector');
+      const prevSelected = parseInt(selector.value || '0', 10);
+      selector.innerHTML = engine.deltaPages.map((_, idx) => `<option value="${idx}">Page #${idx}</option>`).join('');
+      const validIdx = prevSelected < engine.deltaPages.length ? prevSelected : engine.deltaPages.length - 1;
+      selector.value = String(validIdx);
+      renderPageInspector(validIdx);
+
+      // Render WAL Stream (latest 35 records)
+      const walContainer = document.getElementById('wal-stream');
+      const recentWal = engine.walRecords.slice(-35).reverse();
+      const typeColors = {
+        BEGIN: 'text-sky-400',
+        INSERT: 'text-emerald-400',
+        COMMIT: 'text-indigo-400 font-bold',
+        ABORT: 'text-rose-400 font-bold',
+        CHECKPOINT: 'text-purple-400 font-bold',
+      };
+      walContainer.innerHTML = recentWal.map(rec => `
+        <div class="flex items-center justify-between gap-2 border-b border-slate-900 pb-1">
+          <div class="truncate">
+            <span class="text-slate-500">[LSN:${String(rec.lsn).padStart(4, '0')}]</span>
+            <span class="${typeColors[rec.type] || 'text-slate-300'}">${rec.type}</span>
+            <span class="text-slate-400">txn=${rec.txnId}</span>
+            ${rec.pageId !== null ? `<span class="text-slate-500">pg=${rec.pageId}</span>` : ''}
+          </div>
+          <span class="text-[10px] text-slate-600 shrink-0">CRC:${rec.crc}</span>
+        </div>
+      `).join('');
+    }
+
+    function renderPageInspector(pageIdx) {
+      const page = engine.deltaPages[pageIdx] || engine.deltaPages[0];
+      if (!page) return;
+
+      const freeBytes = page.freeSpaceRemaining();
+      const slotBytes = page.numSlots * SLOT_SIZE;
+      const tupleBytes = PAGE_SIZE - page.freeSpaceOffset;
+
+      document.getElementById('insp-slots').textContent = page.numSlots;
+      document.getElementById('insp-free').textContent = `${freeBytes} B`;
+      document.getElementById('insp-lsn').textContent = page.lsn;
+
+      const headerPct = Math.max(3, (HEADER_SIZE / PAGE_SIZE) * 100);
+      const slotPct = (slotBytes / PAGE_SIZE) * 100;
+      const tuplePct = (tupleBytes / PAGE_SIZE) * 100;
+      const freePct = Math.max(0, 100 - headerPct - slotPct - tuplePct);
+
+      document.getElementById('bar-header').style.width = `${headerPct}%`;
+      document.getElementById('bar-slots').style.width = `${slotPct}%`;
+      document.getElementById('bar-free').style.width = `${freePct}%`;
+      document.getElementById('bar-tuples').style.width = `${tuplePct}%`;
+
+      const listEl = document.getElementById('page-slot-list');
+      if (page.numSlots === 0) {
+        listEl.innerHTML = '<div class="text-slate-600 italic">Page empty (4,080 bytes available).</div>';
+        return;
+      }
+
+      const items = [];
+      for (let s = 0; s < page.numSlots; s++) {
+        const tup = page.getTuple(s);
+        const statusClass = tup.isDeleted ? 'line-through text-rose-400/70' : 'text-slate-200';
+        const xmaxStr = tup.xmax === MAX_TXN_ID ? '∞' : tup.xmax;
+        items.push(`
+          <div class="flex items-center justify-between gap-2 bg-slate-900/70 px-2 py-1 rounded ${statusClass}">
+            <span class="text-sky-400 shrink-0">#${s} @${tup.offset}B [xmin:${tup.xmin}, xmax:${xmaxStr}]</span>
+            <span class="truncate text-emerald-300">${JSON.stringify(tup.row)}</span>
+          </div>
+        `);
+      }
+      listEl.innerHTML = items.join('');
+    }
+
+    function renderQueryResults(result) {
+      document.getElementById('query-latency').textContent = result.latencyMs;
+      document.getElementById('query-plan-badge').textContent = `Plan: ${result.plan}`;
+
+      const thead = document.getElementById('result-thead');
+      const tbody = document.getElementById('result-tbody');
+
+      thead.innerHTML = `<tr>${result.columns.map(c => `<th class="px-3 py-2 font-semibold">${c}</th>`).join('')}</tr>`;
+      if (result.rows.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="${result.columns.length}" class="p-4 text-center text-slate-500">0 rows returned.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = result.rows.map(r => `
+        <tr class="hover:bg-slate-900/60">
+          ${r.map(cell => `<td class="px-3 py-1.5">${cell}</td>`).join('')}
+        </tr>
+      `).join('');
+    }
+
+    function runCurrentSQL() {
+      const sql = document.getElementById('sql-input').value;
+      try {
+        const res = engine.executeSQL(sql);
+        renderQueryResults(res);
+        refreshAllUI();
+      } catch (err) {
+        showToast('SQL Execution Error', err.message, 'error');
+      }
+    }
+
+    // Event Listeners
+    document.getElementById('btn-begin-txn').addEventListener('click', () => {
+      if (engine.explicitTxn) return;
+      engine.explicitTxn = engine.beginTxn();
+      showToast('Transaction Started', `Explicit MVCC Snapshot TXN #${engine.explicitTxn.txnId} opened.`, 'info');
+      refreshAllUI();
+    });
+
+    document.getElementById('btn-commit-txn').addEventListener('click', () => {
+      if (!engine.explicitTxn) return;
+      const id = engine.explicitTxn.txnId;
+      engine.commitTxn(engine.explicitTxn);
+      engine.explicitTxn = null;
+      showToast('Transaction Committed', `TXN #${id} flushed to WAL and globally visible.`, 'success');
+      refreshAllUI();
+      runCurrentSQL();
+    });
+
+    document.getElementById('btn-abort-txn').addEventListener('click', () => {
+      if (!engine.explicitTxn) return;
+      const id = engine.explicitTxn.txnId;
+      engine.abortTxn(engine.explicitTxn);
+      engine.explicitTxn = null;
+      showToast('Transaction Aborted', `TXN #${id} rolled back via MVCC tombstones.`, 'warn');
+      refreshAllUI();
+      runCurrentSQL();
+    });
+
+    document.getElementById('btn-insert-1').addEventListener('click', () => {
+      const row = generateRandomOrder();
+      const loc = engine.insertOrderRow(row, engine.explicitTxn);
+      showToast('Row Inserted', `Order #${row.order_id} (${row.region}, $${row.amount}) → Page #${loc.pageId} Slot #${loc.slotId}`, 'info');
+      refreshAllUI();
+      runCurrentSQL();
+    });
+
+    document.getElementById('btn-insert-batch').addEventListener('click', () => {
+      const txn = engine.explicitTxn || engine.beginTxn();
+      const isAuto = !engine.explicitTxn;
+      for (let i = 0; i < 250; i++) {
+        engine.insertOrderRow(generateRandomOrder(), txn);
+      }
+      if (isAuto) engine.commitTxn(txn);
+      showToast('Bulk OLTP Ingestion', '250 tuples packed across 4KB Slotted Pages.', 'success');
+      refreshAllUI();
+      runCurrentSQL();
+    });
+
+    document.getElementById('btn-compact').addEventListener('click', () => {
+      const moved = engine.compactDeltaToColumnar();
+      if (moved === 0) {
+        showToast('Compaction Skipped', 'No committed rows available to transpose (commit active txns first).', 'warn');
+      } else {
+        showToast('HTAP Compaction Complete', `Transposed ${moved} rows into contiguous Columnar Segment.`, 'success');
+      }
+      refreshAllUI();
+      runCurrentSQL();
+    });
+
+    document.getElementById('btn-crash-recover').addEventListener('click', () => {
+      const stats = engine.simulateCrashAndRecover();
+      showToast(
+        'ARIES Crash Recovery Complete',
+        `Redo: ${stats.redone} committed ops | Undo: ${stats.undone} uncommitted ops rolled back.`,
+        'warn'
+      );
+      refreshAllUI();
+      runCurrentSQL();
+    });
+
+    document.getElementById('btn-run-sql').addEventListener('click', runCurrentSQL);
+
+    document.getElementById('page-selector').addEventListener('change', (e) => {
+      renderPageInspector(parseInt(e.target.value, 10));
+    });
+
+    document.querySelectorAll('.preset-sql').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const type = btn.getAttribute('data-preset');
+        const box = document.getElementById('sql-input');
+        if (type === 'olap_agg') {
+          box.value = `SELECT region, COUNT(*) AS orders, SUM(amount) AS revenue, AVG(amount) AS avg_ticket\nFROM orders\nWHERE amount > 150\nGROUP BY region;`;
+        } else if (type === 'filter_scan') {
+          box.value = `SELECT order_id, region, category, amount\nFROM orders\nWHERE amount >= 300;`;
+        } else if (type === 'insert_sql') {
+          box.value = `INSERT INTO orders (region, category, amount) VALUES ('NA', 'AI_COMPUTE', 499.99);`;
+        }
+        runCurrentSQL();
+      });
+    });
+
+    // Bootstrap initial seed dataset so the engine is immediately interactive
+    (function bootstrapDatabase() {
+      const initTxn = engine.beginTxn();
+      for (let i = 0; i < 40; i++) {
+        engine.insertOrderRow(generateRandomOrder(), initTxn);
+      }
+      engine.commitTxn(initTxn);
+      engine.compactDeltaToColumnar();
+
+      // Add 8 live rows into the Delta Store so hybrid scan spans both engines right away
+      const liveTxn = engine.beginTxn();
+      for (let i = 0; i < 8; i++) {
+        engine.insertOrderRow(generateRandomOrder(), liveTxn);
+      }
+      engine.commitTxn(liveTxn);
+
+      refreshAllUI();
+      runCurrentSQL();
+    })();
+  </script>
+</body>
+</html>
